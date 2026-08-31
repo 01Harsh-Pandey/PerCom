@@ -12,7 +12,8 @@ evidence that the identity was removed.
 ## First cluster run
 
 ```bash
-git clone https://github.com/01Harsh-Pandey/PerCom.git
+git clone --branch codex/contextguard-pilot --single-branch \
+  https://github.com/01Harsh-Pandey/PerCom.git
 cd PerCom
 bash scripts/download_ntu_humanid.sh data
 sbatch slurm/pilot.sbatch
@@ -47,4 +48,3 @@ intervals, and a mitigation that closes the measured gap.
 The model architecture is a compact adaptation of the MIT-licensed SenseFi
 NTU-Fi LeNet. The targeted-noise impair/repair implementation follows the public
 UNSIR algorithm used by CIU-L.
-
