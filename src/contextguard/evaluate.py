@@ -23,7 +23,15 @@ def labels_logits_features(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     if not records:
         raise ValueError("Cannot evaluate an empty record sequence")
-    loader = make_loader(records, loader_config, shuffle=False)
+    # Evaluation loaders are consumed once. Persistent multiprocessing workers
+    # would outlive each short-lived loader and accumulate file descriptors
+    # across calibration candidates and held-context audits.
+    loader = make_loader(
+        records,
+        loader_config,
+        shuffle=False,
+        persistent_workers=False,
+    )
     labels: list[np.ndarray] = []
     logits: list[np.ndarray] = []
     features: list[np.ndarray] = []

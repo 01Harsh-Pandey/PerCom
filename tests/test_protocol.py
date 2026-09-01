@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from contextguard.data import Trace, make_protocol
+from contextguard.train import TrainConfig, make_loader
 
 
 def fake_records():
@@ -38,3 +39,14 @@ def test_protocol_holds_out_future_context_for_forgotten_user():
     assert len(protocol.retain_held_test) == 7
     assert all(row.condition != "c" for row in protocol.base_train)
     assert all(row.user != "001" for row in protocol.retrain)
+
+
+def test_one_pass_loader_can_disable_persistent_workers():
+    loader = make_loader(
+        fake_records()[:2],
+        TrainConfig(workers=1),
+        shuffle=False,
+        persistent_workers=False,
+    )
+    assert loader.num_workers == 1
+    assert loader.persistent_workers is False

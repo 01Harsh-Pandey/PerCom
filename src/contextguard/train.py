@@ -36,16 +36,22 @@ def seed_everything(seed: int) -> None:
 
 
 def make_loader(
-    records: Sequence[Trace], config: TrainConfig, shuffle: bool
+    records: Sequence[Trace],
+    config: TrainConfig,
+    shuffle: bool,
+    *,
+    persistent_workers: bool | None = None,
 ) -> DataLoader:
     generator = torch.Generator().manual_seed(config.seed)
+    if persistent_workers is None:
+        persistent_workers = config.workers > 0
     return DataLoader(
         NTUHumanIDDataset(records),
         batch_size=config.batch_size,
         shuffle=shuffle,
         num_workers=config.workers,
         pin_memory=torch.cuda.is_available(),
-        persistent_workers=config.workers > 0,
+        persistent_workers=persistent_workers and config.workers > 0,
         generator=generator,
     )
 
@@ -135,4 +141,3 @@ def save_checkpoint(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model": model.state_dict(), "metadata": metadata}, path)
-
