@@ -12,7 +12,8 @@ evidence that the identity was removed.
 ## First cluster run
 
 ```bash
-git clone https://github.com/01Harsh-Pandey/PerCom.git
+git clone --branch codex/contextguard-pilot --single-branch \
+  https://github.com/01Harsh-Pandey/PerCom.git
 cd PerCom
 bash scripts/download_ntu_humanid.sh data
 sbatch slurm/pilot.sbatch
@@ -25,13 +26,35 @@ squeue -u "$USER"
 tail -f slurm-<JOB_ID>.out
 ```
 
-The result is written to
-`outputs/pilot-user001-held-c-seed1/result.json`.
+For the corrected validation-only calibration run, use:
+
+```bash
+sbatch slurm/calibrate.sbatch
+```
+
+The calibration result is written below
+`outputs/calibration-user001-held-c-seed1/`.
+
+## Pilot v1 status
+
+The first completed run was technically successful but scientifically invalid:
+
+- UNSIR retained accuracy collapsed from 94.87% to 20.88%.
+- The forgotten user was under-represented in the original training set.
+- A separately trained representation probe achieved higher AUC on exact
+  retraining than on the original model, proving it measures generic identity
+  separability rather than retained training influence.
+
+The corrected protocol holds out the same condition for every user, selects
+UNSIR settings using source-condition validation data only, and evaluates the
+held condition once after selection. Exact-retraining output equivalence and a
+loss-based membership diagnostic replace probe-AUC difference as the primary
+audits.
 
 ## Why this is not yet a paper claim
 
-The first run is a falsification pilot. We proceed only if it shows a meaningful
-gap between CIU-L/UNSIR and exact retraining. A complete paper requires all 14
+The run is a falsification pilot. We proceed only if it shows a meaningful gap
+between CIU-L/UNSIR and exact retraining. A complete paper requires all 14
 users, all three held conditions, multiple seeds, a second dataset, statistical
 intervals, and a mitigation that closes the measured gap.
 
@@ -47,4 +70,3 @@ intervals, and a mitigation that closes the measured gap.
 The model architecture is a compact adaptation of the MIT-licensed SenseFi
 NTU-Fi LeNet. The targeted-noise impair/repair implementation follows the public
 UNSIR algorithm used by CIU-L.
-
