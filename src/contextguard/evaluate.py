@@ -15,24 +15,32 @@ from .train import TrainConfig, make_loader
 
 
 @torch.inference_mode()
-def _predictions_and_features(
+def labels_logits_features(
     model: nn.Module,
     records: Sequence[Trace],
     loader_config: TrainConfig,
     device: torch.device,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if not records:
+        raise ValueError("Cannot evaluate an empty record sequence")
     loader = make_loader(records, loader_config, shuffle=False)
     labels: list[np.ndarray] = []
-    predictions: list[np.ndarray] = []
+    logits: list[np.ndarray] = []
     features: list[np.ndarray] = []
     model.eval()
     for batch in loader:
         x = batch["x"].to(device, non_blocking=True)
-        logits, embedding = model(x, return_features=True)
+        batch_logits, embedding = model(x, return_features=True)
         labels.append(batch["y"].numpy())
-        predictions.append(logits.argmax(dim=1).cpu().numpy())
+        logits.append(batch_logits.cpu().numpy())
         features.append(embedding.cpu().numpy())
-    return np.concatenate(labels), np.concatenate(predictions), np.concatenate(features)
+    return np.concatenate(labels), np.concatenate(logits), np.concatenate(features)
+
+
+def _softmax(logits: np.ndarray) -> np.ndarray:
+    shifted = logits - logits.max(axis=1, keepdims=True)
+    exp = np.exp(shifted)
+    return exp / exp.sum(axis=1, keepdims=True)
 
 
 def classification_accuracy(
@@ -43,13 +51,50 @@ def classification_accuracy(
 ) -> float:
     if not records:
         return float("nan")
-    labels, predictions, _ = _predictions_and_features(
-        model, records, loader_config, device
+    labels, logits, _ = labels_logits_features(model, records, loader_config, device)
+    return float(np.mean(labels == logits.argmax(axis=1)))
+
+
+def target_confidence(
+    model: nn.Module,
+    records: Sequence[Trace],
+    forget_label: int,
+    loader_config: TrainConfig,
+    device: torch.device,
+) -> float:
+    _, logits, _ = labels_logits_features(model, records, loader_config, device)
+    return float(_softmax(logits)[:, forget_label].mean())
+
+
+def loss_membership_auc(
+    model: nn.Module,
+    former_member_records: Sequence[Trace],
+    nonmember_records: Sequence[Trace],
+    forget_label: int,
+    loader_config: TrainConfig,
+    device: torch.device,
+) -> float:
+    """Simple loss-based audit of former-member distinguishability."""
+
+    _, member_logits, _ = labels_logits_features(
+        model, former_member_records, loader_config, device
     )
-    return float(np.mean(labels == predictions))
+    _, nonmember_logits, _ = labels_logits_features(
+        model, nonmember_records, loader_config, device
+    )
+    scores = np.concatenate(
+        [
+            np.log(_softmax(member_logits)[:, forget_label] + 1e-12),
+            np.log(_softmax(nonmember_logits)[:, forget_label] + 1e-12),
+        ]
+    )
+    labels = np.concatenate(
+        [np.ones(len(member_logits)), np.zeros(len(nonmember_logits))]
+    )
+    return float(roc_auc_score(labels, scores))
 
 
-def contextual_probe(
+def reidentification_probe(
     model: nn.Module,
     train_records: Sequence[Trace],
     test_records: Sequence[Trace],
@@ -57,12 +102,12 @@ def contextual_probe(
     loader_config: TrainConfig,
     device: torch.device,
 ) -> dict[str, float]:
-    """Link a source-context identity to its held-condition traces."""
+    """Measure generic identity separability, not residual training influence."""
 
-    train_y, _, train_x = _predictions_and_features(
+    train_y, _, train_x = labels_logits_features(
         model, train_records, loader_config, device
     )
-    test_y, _, test_x = _predictions_and_features(
+    test_y, _, test_x = labels_logits_features(
         model, test_records, loader_config, device
     )
     train_binary = (train_y == forget_label).astype(np.int64)
@@ -89,6 +134,38 @@ def contextual_probe(
     }
 
 
+def predictive_equivalence(
+    model: nn.Module,
+    retrained_model: nn.Module,
+    records: Sequence[Trace],
+    loader_config: TrainConfig,
+    device: torch.device,
+    drop_label: int | None = None,
+) -> dict[str, float]:
+    """Compare an unlearned model directly with exact retraining."""
+
+    _, model_logits, _ = labels_logits_features(model, records, loader_config, device)
+    _, reference_logits, _ = labels_logits_features(
+        retrained_model, records, loader_config, device
+    )
+    p = np.clip(_softmax(model_logits), 1e-12, 1.0)
+    q = np.clip(_softmax(reference_logits), 1e-12, 1.0)
+    if drop_label is not None:
+        p = np.delete(p, drop_label, axis=1)
+        q = np.delete(q, drop_label, axis=1)
+        p = p / p.sum(axis=1, keepdims=True)
+        q = q / q.sum(axis=1, keepdims=True)
+    midpoint = 0.5 * (p + q)
+    js = 0.5 * np.sum(p * np.log(p / midpoint), axis=1)
+    js += 0.5 * np.sum(q * np.log(q / midpoint), axis=1)
+    return {
+        "mean_js_divergence": float(js.mean()),
+        "prediction_agreement": float(
+            np.mean(p.argmax(axis=1) == q.argmax(axis=1))
+        ),
+    }
+
+
 def evaluate_method(
     model: nn.Module,
     protocol,
@@ -96,16 +173,46 @@ def evaluate_method(
     device: torch.device,
 ) -> dict[str, object]:
     return {
+        "forget_validation_label_accuracy": classification_accuracy(
+            model, protocol.forget_validation, loader_config, device
+        ),
+        "retain_validation_accuracy": classification_accuracy(
+            model, protocol.retain_validation, loader_config, device
+        ),
         "forget_seen_label_accuracy": classification_accuracy(
             model, protocol.forget_seen_test, loader_config, device
         ),
         "forget_held_label_accuracy": classification_accuracy(
             model, protocol.forget_held_test, loader_config, device
         ),
+        "retain_seen_accuracy": classification_accuracy(
+            model, protocol.retain_seen_test, loader_config, device
+        ),
+        "retain_held_accuracy": classification_accuracy(
+            model, protocol.retain_held_test, loader_config, device
+        ),
         "retain_accuracy": classification_accuracy(
             model, protocol.retain_test, loader_config, device
         ),
-        "contextual_probe": contextual_probe(
+        "forget_train_target_confidence": target_confidence(
+            model, protocol.forget_train, protocol.forget_label, loader_config, device
+        ),
+        "forget_held_target_confidence": target_confidence(
+            model,
+            protocol.forget_held_test,
+            protocol.forget_label,
+            loader_config,
+            device,
+        ),
+        "loss_membership_auc": loss_membership_auc(
+            model,
+            protocol.forget_train,
+            protocol.forget_held_test,
+            protocol.forget_label,
+            loader_config,
+            device,
+        ),
+        "reidentification_probe_diagnostic": reidentification_probe(
             model,
             protocol.probe_train,
             protocol.probe_test,
@@ -114,4 +221,3 @@ def evaluate_method(
             device,
         ),
     }
-
