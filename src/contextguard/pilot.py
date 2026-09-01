@@ -14,7 +14,7 @@ import sklearn
 import torch
 
 from .data import make_protocol, scan_ntu_humanid
-from .evaluate import evaluate_method
+from .evaluate import evaluate_method, predictive_equivalence
 from .model import CSILeNet
 from .train import TrainConfig, save_checkpoint, seed_everything, train_model
 from .unlearning import UNSIRConfig, unsir_unlearn
@@ -89,8 +89,12 @@ def main() -> None:
         "retrain": len(protocol.retrain),
         "forget_train": len(protocol.forget_train),
         "retain_train": len(protocol.retain_train),
+        "forget_validation": len(protocol.forget_validation),
+        "retain_validation": len(protocol.retain_validation),
         "forget_seen_test": len(protocol.forget_seen_test),
         "forget_held_test": len(protocol.forget_held_test),
+        "retain_seen_test": len(protocol.retain_seen_test),
+        "retain_held_test": len(protocol.retain_held_test),
         "retain_test": len(protocol.retain_test),
     }
     print(json.dumps({"provenance": provenance, "protocol": protocol_summary}, indent=2))
@@ -138,12 +142,29 @@ def main() -> None:
         "retrained": evaluate_method(retrained, protocol, train_config, device),
         "unsir": evaluate_method(unsir, protocol, train_config, device),
     }
-    retrain_auc = metrics["retrained"]["contextual_probe"]["auc"]
-    for method in ("original", "unsir"):
-        metrics[method]["contextual_unlearning_gap_auc"] = (
-            metrics[method]["contextual_probe"]["auc"] - retrain_auc
-        )
-    metrics["retrained"]["contextual_unlearning_gap_auc"] = 0.0
+    for method_name, model in (("original", original), ("unsir", unsir)):
+        metrics[method_name]["equivalence_to_retraining"] = {
+            "forget_held": predictive_equivalence(
+                model,
+                retrained,
+                protocol.forget_held_test,
+                train_config,
+                device,
+                protocol.forget_label,
+            ),
+            "retain_held": predictive_equivalence(
+                model,
+                retrained,
+                protocol.retain_held_test,
+                train_config,
+                device,
+                protocol.forget_label,
+            ),
+        }
+    metrics["retrained"]["equivalence_to_retraining"] = {
+        "forget_held": {"mean_js_divergence": 0.0, "prediction_agreement": 1.0},
+        "retain_held": {"mean_js_divergence": 0.0, "prediction_agreement": 1.0},
+    }
 
     result = {
         "status": "completed",
@@ -157,6 +178,10 @@ def main() -> None:
             "unsir": unsir_training,
         },
         "metrics": metrics,
+        "metric_note": (
+            "The reidentification probe measures generic identity separability. "
+            "It is not interpreted as residual training influence."
+        ),
     }
     with (output / "result.json").open("w", encoding="utf-8") as handle:
         json.dump(result, handle, indent=2, sort_keys=True)
@@ -166,4 +191,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
