@@ -11,6 +11,10 @@
 
 set -euo pipefail
 
+ulimit -n 65536
+printf 'FILE_LIMIT_SOFT=%s\n' "$(ulimit -Sn)"
+printf 'FILE_LIMIT_HARD=%s\n' "$(ulimit -Hn)"
+
 module load miniconda/default
 module load cuda/12.8
 source "$(conda info --base)/etc/profile.d/conda.sh"
