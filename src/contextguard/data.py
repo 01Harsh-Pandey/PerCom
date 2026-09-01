@@ -33,8 +33,12 @@ class Protocol:
     retrain: tuple[Trace, ...]
     forget_train: tuple[Trace, ...]
     retain_train: tuple[Trace, ...]
+    forget_validation: tuple[Trace, ...]
+    retain_validation: tuple[Trace, ...]
     forget_seen_test: tuple[Trace, ...]
     forget_held_test: tuple[Trace, ...]
+    retain_seen_test: tuple[Trace, ...]
+    retain_held_test: tuple[Trace, ...]
     retain_test: tuple[Trace, ...]
     probe_train: tuple[Trace, ...]
     probe_test: tuple[Trace, ...]
@@ -98,9 +102,9 @@ def make_protocol(
 ) -> Protocol:
     """Build a deletion protocol with a future, unseen condition.
 
-    For retained users, the base model sees every condition. For the user who
-    will later request deletion, the base model sees only the two source
-    conditions. The third condition is reserved as a future-context test.
+    Every user is trained on the same two source conditions. The third
+    condition is reserved as a future-context test for every user. This avoids
+    under-representing the forgotten user in the original model.
     """
 
     if held_condition not in EXPECTED_CONDITIONS:
@@ -113,14 +117,28 @@ def make_protocol(
     early = tuple(record for record in records if record.sample_index <= 12)
     late = tuple(record for record in records if record.sample_index >= 13)
 
-    base_train = tuple(
+    base_train = tuple(record for record in early if record.condition != held_condition)
+    retrain = tuple(record for record in base_train if record.user != forget_user)
+    forget_train = tuple(
         record
-        for record in early
-        if not (record.user == forget_user and record.condition == held_condition)
+        for record in base_train
+        if record.user == forget_user and record.sample_index <= 10
     )
-    forget_train = tuple(record for record in base_train if record.user == forget_user)
-    retain_train = tuple(record for record in base_train if record.user != forget_user)
-    retrain = retain_train
+    retain_train = tuple(
+        record
+        for record in base_train
+        if record.user != forget_user and record.sample_index <= 10
+    )
+    forget_validation = tuple(
+        record
+        for record in base_train
+        if record.user == forget_user and record.sample_index in {11, 12}
+    )
+    retain_validation = tuple(
+        record
+        for record in base_train
+        if record.user != forget_user and record.sample_index in {11, 12}
+    )
     forget_seen_test = tuple(
         record
         for record in late
@@ -132,6 +150,12 @@ def make_protocol(
         if record.user == forget_user and record.condition == held_condition
     )
     retain_test = tuple(record for record in late if record.user != forget_user)
+    retain_seen_test = tuple(
+        record for record in retain_test if record.condition != held_condition
+    )
+    retain_held_test = tuple(
+        record for record in retain_test if record.condition == held_condition
+    )
 
     # An attacker receives source-condition reference traces and attempts to
     # link a later held-condition trace. The same probe protocol is evaluated
@@ -155,8 +179,12 @@ def make_protocol(
         retrain=retrain,
         forget_train=forget_train,
         retain_train=retain_train,
+        forget_validation=forget_validation,
+        retain_validation=retain_validation,
         forget_seen_test=forget_seen_test,
         forget_held_test=forget_held_test,
+        retain_seen_test=retain_seen_test,
+        retain_held_test=retain_held_test,
         retain_test=retain_test,
         probe_train=probe_train,
         probe_test=probe_test,
@@ -198,4 +226,3 @@ def stratified_train_validation(
     if not train or not validation:
         raise ValueError("Empty train or validation split")
     return train, validation
-
