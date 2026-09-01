@@ -21,6 +21,8 @@ class UNSIRConfig:
     retain_per_class: int = 10
     impair_learning_rate: float = 0.02
     repair_learning_rate: float = 0.01
+    impair_epochs: int = 1
+    repair_epochs: int = 1
     batch_size: int = 32
     workers: int = 4
     seed: int = 1
@@ -133,18 +135,23 @@ def unsir_unlearn(
     impair_optimizer = torch.optim.Adam(
         model.parameters(), lr=config.impair_learning_rate
     )
-    impair_loss = _train_epoch(model, impair_loader, impair_optimizer, device)
+    impair_losses = [
+        _train_epoch(model, impair_loader, impair_optimizer, device)
+        for _ in range(config.impair_epochs)
+    ]
 
     repair_optimizer = torch.optim.Adam(
         model.parameters(), lr=config.repair_learning_rate
     )
-    repair_loss = _train_epoch(model, retained_loader, repair_optimizer, device)
+    repair_losses = [
+        _train_epoch(model, retained_loader, repair_optimizer, device)
+        for _ in range(config.repair_epochs)
+    ]
     return model, {
         "config": asdict(config),
         "noise_final_loss": noise_history[-1],
         "noise_history": noise_history,
-        "impair_loss": impair_loss,
-        "repair_loss": repair_loss,
+        "impair_losses": impair_losses,
+        "repair_losses": repair_losses,
         "retained_replay_examples": len(sampled_retained),
     }
-
