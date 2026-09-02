@@ -16,7 +16,7 @@ from contextguard.utility_pilot import context_balanced_retained
 
 
 def synthetic_records():
-    users = tuple(f"{index:03d}" for index in range(1, 15))
+    users = tuple(f"{index:03d}" for index in range(1, 14)) + ("015",)
     return tuple(
         Trace(Path(f"/{user}/{condition}{index}.mat"), user, label, condition, index, "synthetic")
         for label, user in enumerate(users)
@@ -47,9 +47,10 @@ def test_full_retained_pool_is_context_balanced():
 
 
 def test_development_partition_is_exactly_twelve_cases():
+    users = tuple(f"{index:03d}" for index in range(1, 14)) + ("015",)
     cases = [
         (user, held, seed)
-        for user in (f"{index:03d}" for index in range(1, 15))
+        for user in users
         for held in ("a", "b", "c")
         for seed in (1, 2, 3)
     ]
